@@ -48,11 +48,22 @@ class FileRecord:
 
 PATTERNS = {
     "mrn": re.compile(r"\b(?:MRN|PHN|HCN)[:\s#]*[A-Z0-9-]{4,}\b", re.I),
-    "long_id": re.compile(r"\b\d{7,12}\b"),
+    "alnum_id": re.compile(r"\b[A-Z]{1,4}\d{5,}[A-Z]{0,3}\b", re.I),
+    "long_id": re.compile(r"\b\d{6,12}\b"),
     "email": re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b"),
     "phone": re.compile(r"\b(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b"),
     "dob": re.compile(r"\b(?:DOB|born)[:\s]*\d{1,4}[/-]\d{1,2}[/-]\d{1,4}\b", re.I),
+    # Period required for mr/mrs/ms so "MR imaging" in a motor-control lab survives.
+    "honorific": re.compile(r"\b(?:(?:dr|prof)\.?|(?:mr|mrs|ms)\.)\s+\w+(?:-\w+)*", re.I),
 }
+# ponytail: regex matches typed patterns; it does not detect identifiers. Two
+# red-team rounds fixed what was cheap and left a named residual class: a bare
+# 1994-03-02 in the date field (indistinguishable from a document date), unlisted
+# names ("Bob Smith" as a project value, "Dr. Van Helsing"'s second surname word,
+# a "-Park" appended to a known name), and bare numerics under 6 digits. Survivable
+# now because RISKY_DOC_TYPES holds the worst documents back whole; GLiNER-PII
+# inside Presidio is the phase-2 upgrade path for the entire class. Do not keep
+# widening these patterns — that arms race is unwinnable and PLAN.md says so.
 
 
 @dataclass
@@ -86,12 +97,18 @@ class Redactor:
     def _scrub(self, text: str, people: list[str]) -> str:
         # Longest first, so "Jane Chen" is replaced before "Chen" is.
         for name in sorted(people, key=len, reverse=True):
-            text = re.sub(rf"\b{re.escape(name)}\b", self._alias_for(name), text)
+            text = re.sub(rf"\b{re.escape(name)}\b", self._alias_for(name), text, flags=re.I)
             # ponytail: surnames only. A doc calling her "Jane" and never "Jane Chen"
             # keeps the first name. Swap in a real NER pass when a lab hits that.
             parts = name.split()
             if len(parts) > 1:
-                text = re.sub(rf"\b{re.escape(parts[-1])}\b", self._alias_for(name), text)
+                text = re.sub(
+                    rf"\b{re.escape(parts[-1])}\b", self._alias_for(name), text, flags=re.I
+                )
+                # "JaneChen"/"JANECHEN" — concatenation defeats \b, red-team found it.
+                text = re.sub(
+                    re.escape("".join(parts)), self._alias_for(name), text, flags=re.I
+                )
         for pattern in PATTERNS.values():
             text = pattern.sub("[REDACTED]", text)
         return text
@@ -199,7 +216,9 @@ def _demo() -> None:
             path="/Volumes/LabHD/reach study/methods_draft.docx",
             sha256="d" * 64,
             doc_type="manuscript",
-            summary="Methods section for the adaptation paper.",
+            summary="Methods section for the adaptation paper. Reviewed by Dr. Ramirez, "
+            "cc dr. singh. See JANECHEN thesis; sample E1234567, subject 482019, "
+            "batch ABCD12345.",
             people=["Jane Chen"],
             project="Jane Chen reach study",  # layer 1 put a name in a metadata field
             flags=["person_name"],
@@ -219,8 +238,13 @@ def _demo() -> None:
     wire = json.dumps(asdict(packet))
 
     # The only test that really matters: nothing identifying is on the wire.
-    for leak in ("Jane", "Chen", "4820193", "1994-03-02", "jane@uni.ca"):
-        assert leak not in wire, f"LEAK: {leak!r} crossed the proxy"
+    # Ramirez, singh, E1234567, 482019, ABCD12345 and the JANECHEN casing are
+    # red-team regression cases. Case-insensitive, so case-mangling can't pass.
+    for leak in (
+        "Jane", "Chen", "4820193", "1994-03-02", "jane@uni.ca",
+        "Ramirez", "singh", "E1234567", "482019", "ABCD12345",
+    ):
+        assert leak.lower() not in wire.lower(), f"LEAK: {leak!r} crossed the proxy"
 
     # Finding 1: a consent form is held back even with every flag handled.
     assert any("risky doc type" in h for h in packet.held_back), packet.held_back
