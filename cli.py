@@ -28,6 +28,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import approve
+import tui
 from postdoc import FileRecord, Redactor
 from ingest import ingest, stats as ingest_stats
 from textget import extract_text
@@ -68,8 +69,8 @@ def cmd_scan(args) -> int:
     # extract reads. Mirrors leakgate.run_gate's replace(r, summary=text).
     records = [replace(r, summary=extract_text(r.path)[0]) for r in result.records]
     _write_records(args.out, records)
-    print(ingest_stats(result))
-    print(f"wrote {len(records)} records -> {args.out} (0600, may contain PHI)")
+    print(tui.g(ingest_stats(result)))
+    print(tui.dim(f"wrote {len(records)} records -> {args.out} (0600, may contain PHI)"))
     return 0
 
 
@@ -85,8 +86,9 @@ def cmd_extract(args) -> int:
             out.append(replace(r, flags=preflag(r.summary) + ["unverified_extraction"]))
     _write_records(args.records, out)  # in place
     unverified = sum("unverified_extraction" in r.flags for r in out)
-    print(f"extracted {len(out)} records ({'live' if args.live else 'offline'}); "
-          f"{unverified} unverified (will be held back)")
+    tail = f"{unverified} unverified (will be held back)"
+    print(tui.g(f"extracted {len(out)} records ({'live' if args.live else 'offline'}); ")
+          + (tui.warn(tail) if unverified else tui.bright(tail)))
     return 0
 
 
@@ -95,7 +97,9 @@ def cmd_packet(args) -> int:
     # packet.json is the redacted wire form — safe by construction, default perms.
     with open(args.out, "w") as f:
         json.dump(asdict(packet), f, indent=2)
-    print(f"{len(packet.records)} crossed, {len(packet.held_back)} held back -> {args.out}")
+    print(tui.bright(f"{len(packet.records)} crossed") + tui.g(", ")
+          + tui.warn(f"{len(packet.held_back)} held back")
+          + tui.dim(f" -> {args.out}"))
     return 0
 
 
@@ -104,7 +108,7 @@ def cmd_gate(args) -> int:
     print(approve.review(packet))
     decision = args.yes or input("\nApprove for send? [y/N] ").strip().lower() == "y"
     result = approve.approve(packet, decision, args.log)
-    print("\napproved" if result is not None else "\ndenied")
+    print("\n" + (tui.bright("approved") if result is not None else tui.bad("denied")))
     return 0 if result is not None else 1
 
 
@@ -130,9 +134,10 @@ def cmd_talk(args) -> int:
         from voice import loop  # macOS say + whisper.cpp; degrades to typed input
         loop(blocks, edges)
         return 0
+    print(tui.rule())
     for line in narrate(blocks, edges):
-        print(line)
-    print()
+        tui.type_out(line)
+    print(tui.rule())
     repl(blocks, edges)
     return 0
 
@@ -141,20 +146,21 @@ def cmd_leakgate(args) -> int:
     corpus_dir = Path(SCRATCH) / "cli_leakgate"
     generate(corpus_dir, seed=0, n=12)
     report = run_gate(corpus_dir, corpus_dir / "manifest.json", live_model=args.live)
-    print(f"crossed:       {report.crossed}")
-    print(f"held:          {sum(report.held.values())}")
+    print(tui.g(f"crossed:       {report.crossed}"))
+    print(tui.warn(f"held:          {sum(report.held.values())}"))
     for reason, count in sorted(report.held.items()):
-        print(f"                 {count:>3}  {reason}")
-    print(f"leaks:         {len(report.leaks)}")
+        print(tui.dim(f"                 {count:>3}  {reason}"))
+    n_leaks = len(report.leaks)
+    print(tui.bright("leaks:         0") if not n_leaks else tui.bad(f"leaks:         {n_leaks}"))
     for leak in report.leaks:
-        print(f"                 LEAK: {leak!r}")
-    print(f"crossing_rate: {report.crossing_rate:.0%}")
+        print(tui.bad(f"                 LEAK: {leak!r}"))
+    print(tui.g(f"crossing_rate: {report.crossing_rate:.0%}"))
     if report.leaks:
-        print(f"FAIL — {len(report.leaks)} manifest identifier(s) crossed the proxy")
+        print(tui.bad(f"FAIL — {n_leaks} manifest identifier(s) crossed the proxy"))
         return 1
     if report.crossing_rate == 0.0:
-        print("WARNING: 0% crossing — offline every record fails closed; zero leaks "
-              "here is trivial. The --live gate proves the scrubbing itself.")
+        print(tui.warn("WARNING: 0% crossing — offline every record fails closed; zero "
+                       "leaks here is trivial. The --live gate proves the scrubbing itself."))
     return 0
 
 
@@ -206,6 +212,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _parser().parse_args(argv)
+    if sys.stdout.isatty():  # the cover is for humans; piped output skips it
+        print(tui.banner())
     return args.func(args)
 
 
