@@ -79,7 +79,8 @@ graph, narrated.
 | `graphview.py` | Layer 3 presentation. Pure, deterministic `(list[Block], list[Edge]) -> str` Mermaid rendering — no I/O, no model calls, no randomness. |
 | `walkthrough.py` | Layer 3/4 lite. Turns an approved graph into spoken-style narration and answers keyword questions against it. No model, no speech — that's phase 4 proper. |
 | `approve.py` | Phase 5, the PI gate. Renders a `SafePacket` exactly as it will cross the wire; `approve()` is the only door, always writes an audit line, and returns the packet on yes / `None` on no. |
-| `cli.py` | The wiring. argparse over the pipeline: `scan`/`extract`/`packet`/`gate`/`graph`/`talk`/`leakgate`, offline by default. |
+| `voice.py` | Phase 4, the speech shell. Composable push-to-talk: whisper.cpp STT → `walkthrough.answer` → macOS `say` TTS, three separate processes so the middle one only ever sees the approved graph. Degrades to typed input when whisper is absent. |
+| `cli.py` | The wiring. argparse over the pipeline: `scan`/`extract`/`packet`/`gate`/`graph`/`talk [--voice]`/`leakgate`, offline by default. |
 | `README.md` | This file. Architecture, roadmap, stack, validation — the only document. |
 | `LICENSE` | Apache-2.0. Permissive like MIT but with an express patent grant, which is what hospital and university legal teams approve most readily. |
 | `.gitignore` | The usual Python noise. |
@@ -131,8 +132,11 @@ only ever sees pseudonyms.
 *Check:* show the graph to a PI. They either say "yes, that's my lab" or point at
 what's wrong. That's the eval. It doesn't need to be more numerical than that yet.
 
-**4 — walkthrough and voice.** Text-only lite, built (`walkthrough.py`) — narration and
-keyword Q&A over an approved graph; the two-way voice half isn't wired yet. Two-way speech over the approved packet.
+**4 — walkthrough and voice.** Built as a lite (`walkthrough.py`, `voice.py`) —
+narration and keyword Q&A over an approved graph, spoken aloud on macOS via
+`say`, with push-to-talk whisper.cpp STT when installed (`brew install
+whisper-cpp` plus a ggml model at `~/.cache/whisper/`). Two-way speech over the
+approved packet; the conversational LLM layer on top is phase 4 proper.
 *Check:* the pass condition. A real newcomer, after one session, can name the active
 projects, say what data exists for theirs and where it lives, name who to ask about
 what, and identify the protocol they're working under. Four questions, graded by a

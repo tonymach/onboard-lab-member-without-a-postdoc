@@ -126,6 +126,10 @@ def cmd_graph(args) -> int:
 def cmd_talk(args) -> int:
     packet = approve._load_packet(args.packet)
     blocks, edges = synthesize(packet, FakeBackend())  # offline graph over the approved packet
+    if args.voice:
+        from voice import loop  # macOS say + whisper.cpp; degrades to typed input
+        loop(blocks, edges)
+        return 0
     for line in narrate(blocks, edges):
         print(line)
     print()
@@ -190,6 +194,8 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("talk", help="narrate the graph and answer questions (interactive)")
     p.add_argument("packet", help="packet.json from packet")
+    p.add_argument("--voice", action="store_true",
+                   help="speak answers aloud (macOS say); push-to-talk if whisper-cli is installed")
     p.set_defaults(func=cmd_talk)
 
     p = sub.add_parser("leakgate", help="phase-2 validation: assert no planted identifier crosses")
