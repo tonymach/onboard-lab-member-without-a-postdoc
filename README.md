@@ -69,7 +69,17 @@ graph, narrated.
 
 | File | What it is |
 |---|---|
-| `postdoc.py` | The whole codebase. The three record types, a real redactor (the trust boundary), stubbed catalogue and interpretation layers, and a self-check that doubles as the repo's only test. |
+| `postdoc.py` | The frozen layer contract. The three record types, a real redactor (the trust boundary), stubbed catalogue and interpretation layers, and a self-check that doubles as the repo's only cross-layer test. |
+| `ingest.py` | Layer 1, phase 1. Walks a directory tree, dedupes by sha256, emits one `FileRecord` skeleton per distinct document plus a local-only hash-to-paths index. Local only, zero intelligence. |
+| `textget.py` | Layer 1, phase 1. File to plain text — docx/txt/md via stdlib, pdf via guarded `pypdf`. Local only; output can hold PHI. |
+| `extract.py` | Layer 1, phase 2. Fills `doc_type`/`project`/`people`/`flags` via a local Ollama model, temperature 0, JSON-schema constrained. Fails closed: unreachable, timed-out, or unparseable output gets tagged `unverified_extraction`, which `postdoc.Redactor` doesn't know how to handle and so holds back automatically. |
+| `corpus.py` | Validation asset, offline. Fabricates a small deterministic corpus of lab-like documents with known-planted fake identifiers plus a `manifest.json`, for the phase-2 leak gate. |
+| `leakgate.py` | Phase-2 validation gate, end to end. Runs the real pipeline (ingest → textget → extract → `Redactor.to_packet`) over the generated corpus and asserts zero manifest strings reach the wire. Offline-runnable — every record fails closed with no local model, so the honest offline crossing rate is 0%. |
+| `synthesize.py` | Layer 3, the real interpretation pass. `SafePacket` to `Block`/`Edge` behind a swappable `Backend` — `FakeBackend` (deterministic, no network) or `AnthropicBackend` (live). Refuses anything that isn't a `SafePacket`; validates model output against postdoc's vocab and falls back to `postdoc.interpret` on unparseable output. |
+| `graphview.py` | Layer 3 presentation. Pure, deterministic `(list[Block], list[Edge]) -> str` Mermaid rendering — no I/O, no model calls, no randomness. |
+| `walkthrough.py` | Layer 3/4 lite. Turns an approved graph into spoken-style narration and answers keyword questions against it. No model, no speech — that's phase 4 proper. |
+| `approve.py` | Phase 5, the PI gate. Renders a `SafePacket` exactly as it will cross the wire; `approve()` is the only door, always writes an audit line, and returns the packet on yes / `None` on no. |
+| `cli.py` | The wiring. argparse over the pipeline: `scan`/`extract`/`packet`/`gate`/`graph`/`talk`/`leakgate`, offline by default. |
 | `README.md` | This file. Architecture, roadmap, stack, validation — the only document. |
 | `LICENSE` | Apache-2.0. Permissive like MIT but with an express patent grant, which is what hospital and university legal teams approve most readily. |
 | `.gitignore` | The usual Python noise. |
@@ -92,13 +102,14 @@ next one being good.
 for real, and self-checks that nothing identifying reaches the wire.
 *Check:* `python3 postdoc.py`.
 
-**1 — ingest, no models.** docx and pdf to plain text plus a `FileRecord` skeleton:
+**1 — ingest, no models.** Built (`ingest.py`, `textget.py`). docx and pdf to plain text plus a `FileRecord` skeleton:
 path, hash, mtime, size, dedupe. Zero intelligence.
 *Check:* point it at a real messy folder. It emits a record per file, crashes on
 none, and reports how many of the N files are actually distinct documents. That
 number alone is a demo — most labs do not know it.
 
-**2 — local extraction.** A small local model fills `doc_type`, `project`, `people`,
+**2 — local extraction.** Built, offline fail-closed by default, live via local Ollama
+(`extract.py`, `leakgate.py`, `corpus.py`). A small local model fills `doc_type`, `project`, `people`,
 `flags`. This is where redaction gets its teeth, because the doc-type gate and the
 flags drive it.
 *Check:* **leaks at the boundary, not entity F1** — the self-check's assertion,
@@ -114,18 +125,20 @@ count — a gate that holds everything back also "passes". A missed consent form
 the failure that ends the project, and a human reviews the first packet from any new
 lab before it sends.
 
-**3 — interpretation.** `SafePacket` to blocks and edges, via a frontier model that
+**3 — interpretation.** Built, behind `FakeBackend`/`AnthropicBackend`
+(`synthesize.py`, `graphview.py`). `SafePacket` to blocks and edges, via a frontier model that
 only ever sees pseudonyms.
 *Check:* show the graph to a PI. They either say "yes, that's my lab" or point at
 what's wrong. That's the eval. It doesn't need to be more numerical than that yet.
 
-**4 — walkthrough and voice.** Two-way speech over the approved packet.
+**4 — walkthrough and voice.** Text-only lite, built (`walkthrough.py`) — narration and
+keyword Q&A over an approved graph; the two-way voice half isn't wired yet. Two-way speech over the approved packet.
 *Check:* the pass condition. A real newcomer, after one session, can name the active
 projects, say what data exists for theirs and where it lives, name who to ask about
 what, and identify the protocol they're working under. Four questions, graded by a
 human.
 
-**5 — PI approval.** The gate before anything reaches a newcomer.
+**5 — PI approval.** Built, as `approve.py`. The gate before anything reaches a newcomer.
 *Check:* time it with a stopwatch. Over ten minutes per newcomer and it gets
 redesigned into a one-time blessing plus exception review, because a PI will not
 spend eleven.
@@ -209,4 +222,18 @@ by arguing.
 
 ```
 python3 postdoc.py     # self-check, no dependencies
+python3 cli.py          # self-check: offline pipeline end to end, no models, no network
+```
+
+The pipeline, offline by default (`extract` and `graph` take `--live` to use a real
+local Ollama model / `AnthropicBackend`):
+
+```
+python3 cli.py scan ROOT                    # layer 1: walk + textget -> records.json (0600, PHI)
+python3 cli.py extract records.json         # fill fields; offline fails every record closed
+python3 cli.py packet records.json          # the proxy: redact -> packet.json (pseudonyms only)
+python3 cli.py gate packet.json             # PI approval gate, logs a decision (--yes to skip prompt)
+python3 cli.py graph packet.json            # layer 3: synthesize + render the onboarding graph
+python3 cli.py talk packet.json             # narrate the graph, answer questions
+python3 cli.py leakgate                     # phase-2 validation: generate corpus, assert no leak crosses
 ```
