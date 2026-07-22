@@ -207,6 +207,9 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("leakgate", help="phase-2 validation: assert no planted identifier crosses")
     p.add_argument("--live", action="store_true", help="use Ollama for extraction (default: offline)")
     p.set_defaults(func=cmd_leakgate)
+
+    p = sub.add_parser("guide", help="guided run — prompts through every step (start here)")
+    p.set_defaults(func=lambda _a: __import__("wizard").run())
     return ap
 
 

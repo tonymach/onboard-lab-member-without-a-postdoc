@@ -81,6 +81,7 @@ graph, narrated.
 | `approve.py` | Phase 5, the PI gate. Renders a `SafePacket` exactly as it will cross the wire; `approve()` is the only door, always writes an audit line, and returns the packet on yes / `None` on no. |
 | `voice.py` | Phase 4, the speech shell. Composable push-to-talk: whisper.cpp STT → `walkthrough.answer` → macOS `say` TTS, three separate processes so the middle one only ever sees the approved graph. Degrades to typed input when whisper is absent. |
 | `cli.py` | The wiring. argparse over the pipeline: `scan`/`extract`/`packet`/`gate`/`graph`/`talk [--voice]`/`leakgate`, offline by default. |
+| `wizard.py` | The guided run. Prompts through every step — pick a folder, scan, extract, review what would cross, approve, then graph or talk. Delegates to `cli.py`'s own commands, so there is no second code path. Warns before scanning a huge tree. |
 | `tui.py` | The phosphor skin. Green-CRT ANSI styling and the ASCII cover for `cli.py` — pure presentation, auto-disabled when piped or `NO_COLOR` is set, imported by nothing below the CLI. |
 | `README.md` | This file. Architecture, roadmap, stack, validation — the only document. |
 | `LICENSE` | Apache-2.0. Permissive like MIT but with an express patent grant, which is what hospital and university legal teams approve most readily. |
